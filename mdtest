@@ -1,0 +1,233 @@
+#!/usr/bin/env python
+# -*- coding: utf-8 -*-
+
+import sys
+import shutil
+import os
+import re
+
+VERSION_MAJOR = "1"
+VERSION_MINOR = "0"
+
+class bcolors:
+    HEADER = u'\033[01m'
+    OKBLUE = u'\033[94m'
+    OKCYAN = u'\033[96m'
+    OKGREEN = u'\033[01m\033[92m'
+    FAIL = u'\033[01m\033[91m'
+    ENDC = u'\033[0m'
+    BOLD = u'\033[1m'
+    UNDERLINE = u'\033[4m'
+
+RM_TEMPS = True
+QUIET = False
+VERBOSE = False
+SECTIONS = set()
+SUBSECTIONS = set()
+
+def help():
+    print("Usage: " + sys.argv[0] + " [OPTIONS] TEST|DIRECTORY...")
+    print("")
+    print("Options:")
+    print("  -h, --help: Prints usage information.")
+    print("  -sSECTION, --section=SECTION: Run only the tests in the specified sections.")
+    print("  -tTEST, --test=TEST: Run only the specified tests.")
+    print("  -k, --keep: Keep the snippet, output, and error log files instead of erasing them.")
+    print("  -q, --quiet: Reduce console output, such as printing standard error on failure.")
+    print("  -v, --verbose: Increase console output, such as printing all of standard error instead of the first few lines.")
+    print("  --version: Prints the version of the mdtest tool.")
+    exit(1)
+
+if len(sys.argv) > 1 and (sys.argv[1] == '--help' or sys.argv[1] == '-h'):
+    help()
+ 
+for arg in sys.argv[1:]:
+    if arg.startswith("-s"):
+        sections = arg[2:].split(",")
+        SECTIONS.update(sections)
+    elif arg.startswith("--section="):
+        sections = arg[10:].split(",")
+        SECTIONS.update(sections)
+    elif arg.startswith("-t"):
+        subsections = arg[2:].split(",")
+        SUBSECTIONS.update(subsections)
+    elif arg.startswith("--test="):
+        subsections = arg[7:].split(",")
+        SUBSECTIONS.update(subsections)
+    elif arg == "-q" or arg == "--quiet":
+        QUIET = True
+    elif arg == "-k" or arg == "--keep":
+        RM_TEMPS = False
+    elif arg == "-v" or arg == "--verbose":
+        VERBOSE = True
+    elif arg == "--version":
+        print("mdtest " + VERSION_MAJOR + "." + VERSION_MINOR)
+        exit(0)
+    elif arg.startswith('-'):
+        if len(arg) > 1 and arg[1] == '-':
+            print("Unrecognized command line option '" + arg + "'.")
+            print("")
+            help()
+        for ch in arg[1:]:
+            if ch == 'q': QUIET = True
+            elif ch == 'k': RM_TEMPS = False
+            elif ch == 'v': VERBOSE = True
+            elif ch == 't' or ch == 's':
+                print("Improper use of '-" + ch + "'.")
+                print("")
+                help()
+            else:
+                print("Unrecognized command line option '-" + ch + "'.")
+                print("")
+                help()
+
+cwd = os.getcwd()
+
+def find_runners(path):
+    global cwd
+    search_dirs = [path]
+    subdirs = re.split('/|\\\\', path)
+    search = "./"
+    runners = {}
+    for subdir in subdirs:
+        runnerdir = os.path.join(search, "runners")
+        if os.path.isdir(runnerdir):
+            for file in os.listdir(runnerdir):
+                runners[file] = os.path.join(runnerdir, file)
+        search = os.path.join(search, subdir)
+    return runners
+
+paths = [arg for arg in sys.argv[1:] if not arg.startswith("-")]
+if not paths: paths = ["./"]
+
+def run_test(runners, path):
+    with open(path, "r") as f:
+        print(bcolors.HEADER + "-------- " + path + " --------" + bcolors.ENDC)
+        lines = f.readlines()
+        dialect = None
+        sample = []
+        section = ""
+        subsection = ""
+        subsection_failing = False
+        n_tests = 0
+        n_pass = 0
+        n_tests_in_subsection = 0
+        n_passes_in_subsection = 0
+        subsection_errors = []
+        for line in lines:
+            if dialect is None and line.startswith("####") or line.startswith("###"):
+                continue
+            elif dialect is None and line.startswith("##"):
+                if subsection:
+                    n_tests += 1
+                    if section: sys.stdout.write("    ",)
+                    sys.stdout.write(subsection)
+                    sys.stdout.write(": ")
+                    if n_passes_in_subsection < n_tests_in_subsection:
+                        print(bcolors.FAIL + u"\u2717" + bcolors.ENDC)
+                        for err in subsection_errors:
+                            sys.stdout.write(err)
+                    else:
+                        print(bcolors.OKGREEN + u"\u2713" + bcolors.ENDC)
+                        n_pass += 1
+
+                subsection = line[2:].strip()
+                n_tests_in_subsection = 0
+                n_passes_in_subsection = 0
+                subsection_errors = []
+            elif dialect is None and line.startswith("#"):
+                if subsection:
+                    n_tests += 1
+                    if section: sys.stdout.write("    ",)
+                    sys.stdout.write(subsection)
+                    sys.stdout.write(": ")
+                    if n_passes_in_subsection < n_tests_in_subsection:
+                        print(bcolors.FAIL + u"\u2717" + bcolors.ENDC)
+                        for err in subsection_errors:
+                            sys.stdout.write(err)
+                    else:
+                        print(bcolors.OKGREEN + u"\u2713" + bcolors.ENDC)
+                        n_pass += 1
+                    subsection = None
+                section = line[2:].strip()  
+                if not SECTIONS or section in SECTIONS: print("  " + bcolors.HEADER + section + bcolors.ENDC)
+            elif line.startswith("```") and dialect is None:
+                dialect = line[3:].strip()
+            elif line.startswith("```") and dialect is not None:    
+                if dialect not in runners:
+                    dialect = None
+                    continue
+
+                if SUBSECTIONS and subsection not in SUBSECTIONS:
+                    dialect = None
+                    sample = []
+                    continue
+                if SECTIONS and section not in SECTIONS:
+                    dialect = None
+                    sample = []
+                    continue
+
+                if not subsection:
+                    print("No test name available when running test!")
+                
+                with open(".mdtest_tmp", "w") as outfile:
+                    for line in sample:
+                        outfile.write(line)
+                    sample = []
+                result = os.system(runners[dialect] + " " + ".mdtest_tmp .mdtest_stdout .mdtest_stderr")
+                if result != 0:
+                    error = ""
+                    if os.path.isfile(".mdtest_stderr") and not QUIET:
+                        with open(".mdtest_stderr", "r") as err:
+                            max = 10
+                            for line in err.readlines():
+                                if max == 0 and not VERBOSE:
+                                    error += "\n"
+                                    error += bcolors.FAIL + u"      \u27a4 ..."
+                                    break
+                                if max != 10: error += "\n"
+                                error += bcolors.FAIL + u"      \u27a4 " + line + bcolors.ENDC
+                                max -= 1
+                    if error:
+                        subsection_errors.append(error)
+                else:
+                    n_passes_in_subsection += 1
+                if RM_TEMPS:
+                    os.remove(".mdtest_tmp")
+                    if os.path.isfile(".mdtest_stdout"): os.remove(".mdtest_stdout")
+                    if os.path.isfile(".mdtest_stderr"): os.remove(".mdtest_stderr")
+                dialect = None
+                n_tests_in_subsection += 1
+            elif dialect is not None:
+                sample.append(line)
+
+        if subsection:
+            n_tests += 1
+            if section: sys.stdout.write("    ",)
+            sys.stdout.write(subsection)
+            sys.stdout.write(": ")
+            if n_passes_in_subsection < n_tests_in_subsection:
+                print(bcolors.FAIL + u"\u2717" + bcolors.ENDC)
+                for err in subsection_errors:
+                    sys.stdout.write(err)
+            else:
+                print(bcolors.OKGREEN + u"\u2713" + bcolors.ENDC)
+                n_pass += 1
+
+        color = None
+        if n_pass == n_tests: color = bcolors.OKGREEN
+        else: color = bcolors.FAIL
+        print("")
+        print(bcolors.HEADER + "  " + color + str(n_pass) + " / " + str(n_tests) + bcolors.ENDC + " tests passed")
+        print(bcolors.HEADER + "-------- " + path + " --------" + bcolors.ENDC)
+        print("")
+
+def run_tests_at_path(path):
+    if path.endswith(".md"):
+        run_test(find_runners(path), path)
+    elif os.path.isdir(path):
+        for p in os.listdir(path):
+            run_tests_at_path(os.path.join(path, p))
+
+for path in paths:
+    run_tests_at_path(path)

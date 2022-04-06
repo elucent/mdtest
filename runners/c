@@ -1,0 +1,62 @@
+#!/usr/bin/env python
+
+import sys
+import os
+from distutils import spawn
+
+desired = []
+
+cc = None
+cc_options = [
+    "gcc", "clang",
+    "gcc-11", "clang-14", "gcc-10", "clang-13", "gcc-9", "clang-12", "gcc-8", "clang-11", "gcc-7", "clang-10", 
+    "gcc-6", "clang-9", "gcc-5", "clang-8", "gcc-4", "clang-7", "gcc-3", "clang-6", "gcc-2", "gcc-1", "clang-5", "clang-4", "clang-3", "clang-2", "clang-1"
+]
+
+try:
+    cc = os.environ["CC"]
+except:
+    for cc_opt in cc_options:
+        cc_path = spawn.find_executable(cc_opt)
+        if cc_path is not None:
+            cc = cc_path
+            break
+if cc is None:
+    with open(sys.argv[3]) as err:
+        err.write("Could not find valid C compiler. Consider setting the CC environment variable.\n");
+    exit(1)
+
+with open(sys.argv[1], "r") as f:
+    lines = f.readlines()
+    for line in lines:
+        if "//" in line:
+            output = line[line.index("//") + 2:].lstrip().rstrip()
+            desired.append(output)
+
+os.rename(sys.argv[1], "mdtest.c")
+compile_result = os.system(cc + " mdtest.c -o a.out 2> " + sys.argv[3])
+os.rename("mdtest.c", sys.argv[1])
+if compile_result != 0:
+    exit(1)
+exec_result = os.system("./a.out " + sys.argv[1] + " 1> " + sys.argv[2] + " 2> " + sys.argv[3])
+os.remove("./a.out")
+if exec_result != 0:
+    exit(1)
+
+with open(sys.argv[2], "r") as f:
+    with open(sys.argv[3], "a+") as err:
+        lines = f.readlines()
+        lineno = 1
+        for correct, line in zip(desired, lines):
+            if line is None and correct is not None:
+                err.write("Output mismatch on line " + str(lineno) + ": expected '" + correct + "' but found empty line.\n")
+                f.close()
+                err.close()
+                exit(1)
+            trimmed = line.lstrip().rstrip()
+            if trimmed != correct:
+                err.write("Output mismatch on line " + str(lineno) + ": expected '" + correct + "' but found '" + trimmed + "'.\n")
+                f.close()
+                err.close()
+                exit(1)
+            lineno += 1
