@@ -156,6 +156,7 @@ def run_test(runners, path):
             elif line.startswith("```") and dialect is not None:    
                 if dialect not in runners:
                     dialect = None
+                    sample = []
                     continue
 
                 if SUBSECTIONS and subsection not in SUBSECTIONS:

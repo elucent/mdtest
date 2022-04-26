@@ -1,13 +1,19 @@
 #!/usr/bin/env python
 
 #####################################################
-# mdtest runner for the Python programming language #
+# mdtest runner for the Clover programming language #
 #####################################################
 
 import sys
 import os
+from distutils import spawn
 
 desired = []
+
+if spawn.find_executable("clover") is None:
+    with open(sys.argv[3], "a+") as err:
+        err.write("Could not find valid Clover compiler.\n");
+    exit(1)
 
 with open(sys.argv[1], "r") as f:
     lines = f.readlines()
@@ -16,8 +22,17 @@ with open(sys.argv[1], "r") as f:
             output = line[line.index("#") + 1:].lstrip().rstrip()
             desired.append(output)
 
-result = os.system("/usr/bin/env python " + sys.argv[1] + " 1> " + sys.argv[2] + " 2> " + sys.argv[3])
-if result:
+os.rename(sys.argv[1], "mdtest.cl")
+exec_result = os.system("clover mdtest.cl 1> " + sys.argv[2] + " 2> " + sys.argv[3])
+os.rename("mdtest.cl", sys.argv[1])
+if os.path.exists("mdtest.c"): os.remove("mdtest.c")
+if os.path.exists("mdtest.h"): os.remove("mdtest.h")
+if exec_result != 0:
+    with open(sys.argv[3], "a+") as err:
+        err.write("Clover compiler error.")
+        with open(sys.argv[2]) as f:
+            for line in f.readlines():
+                err.write("  " + line)
     exit(1)
 
 with open(sys.argv[2], "r") as f:
